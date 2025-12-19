@@ -1,128 +1,135 @@
-import logging
-import voluptuous as vol
-from typing import Any, Optional, Tuple
+"""Light platform for Beurer TL100."""
+from __future__ import annotations
+
+from typing import Any
+
+from homeassistant.components.light import (
+    ATTR_BRIGHTNESS,
+    ATTR_EFFECT,
+    ATTR_RGB_COLOR,
+    ColorMode,
+    LightEntity,
+    LightEntityFeature,
+)
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util.color import match_max_scale
 
 from .beurer import BeurerInstance
-from .const import DOMAIN
+from .const import DOMAIN, LOGGER
 
-from homeassistant.const import CONF_MAC
-import homeassistant.helpers.config_validation as cv
-from homeassistant.components.light import (COLOR_MODE_RGB, PLATFORM_SCHEMA,
-                                            LightEntity, ATTR_RGB_COLOR, ATTR_BRIGHTNESS, ATTR_EFFECT, COLOR_MODE_WHITE, ATTR_WHITE, LightEntityFeature)
-from homeassistant.util.color import (match_max_scale)
-from homeassistant.helpers import device_registry
-from .const import LOGGER
 
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required(CONF_MAC): cv.string
-})
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the Beurer light platform."""
+    LOGGER.debug("Setting up Beurer light entity")
+    instance: BeurerInstance = hass.data[DOMAIN][config_entry.entry_id]
+    async_add_entities([BeurerLight(instance, config_entry)])
 
-async def async_setup_entry(hass, config_entry, async_add_devices):
-    LOGGER.debug(f"Setting up device from light")
-    instance = hass.data[DOMAIN][config_entry.entry_id]
-    async_add_devices([BeurerLight(instance, config_entry.data["name"], config_entry.entry_id)])
 
 class BeurerLight(LightEntity):
-    def __init__(self, beurerInstance: BeurerInstance, name: str, entry_id: str) -> None:
-        self._instance = beurerInstance
-        self._entry_id = entry_id
-        self._attr_supported_color_modes = {COLOR_MODE_RGB, COLOR_MODE_WHITE}
-        self._color_mode = None
-        self._attr_name = name
-        self._attr_unique_id = self._instance.mac
+    """Representation of a Beurer TL100 light."""
+
+    _attr_has_entity_name = True
+    _attr_name = None
+    _attr_supported_color_modes = {ColorMode.RGB, ColorMode.WHITE}
+    _attr_supported_features = LightEntityFeature.EFFECT
+
+    def __init__(self, instance: BeurerInstance, config_entry: ConfigEntry) -> None:
+        """Initialize the light entity."""
+        self._instance = instance
+        self._attr_unique_id = instance.address
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, instance.address)},
+            name=instance.name,
+            manufacturer="Beurer",
+            model="TL100",
+            connections={(dr.CONNECTION_BLUETOOTH, instance.address)},
+        )
 
     async def async_added_to_hass(self) -> None:
-        """Add update callback after being added to hass."""
-        self._instance.set_update_callback(self.update_callback)
+        """Handle being added to hass."""
+        self._instance.set_update_callback(self._handle_update)
+        # Request initial state
         await self._instance.update()
 
-    def update_callback(self) -> None:
-        """Schedule a state update."""
-        #self.async_schedule_update_ha_state(False)
+    def _handle_update(self) -> None:
+        """Handle state updates from the device."""
         self.schedule_update_ha_state(False)
 
     @property
-    def available(self):
-        return self._instance.is_on != None
+    def available(self) -> bool:
+        """Return True if the device is available."""
+        return self._instance.available
 
-    #We handle update triggers manually, do not poll
     @property
-    def should_poll(self) -> Optional[bool]:
+    def should_poll(self) -> bool:
+        """Return False - we get push updates."""
         return False
 
     @property
-    def brightness(self):
-        if self._instance.color_mode == COLOR_MODE_WHITE:
-            return self._instance.white_brightness
-        else:
-            return self._instance.color_brightness
-        return None
-
-    @property
-    def is_on(self) -> Optional[bool]:
+    def is_on(self) -> bool:
+        """Return True if the light is on."""
         return self._instance.is_on
 
     @property
-    # RGB color/brightness based on https://github.com/home-assistant/core/issues/51175
-    def rgb_color(self):
+    def brightness(self) -> int | None:
+        """Return the brightness of the light."""
+        if self._instance.color_mode == ColorMode.WHITE:
+            return self._instance.white_brightness
+        return self._instance.color_brightness
+
+    @property
+    def rgb_color(self) -> tuple[int, int, int] | None:
+        """Return the RGB color."""
         if self._instance.rgb_color:
             return match_max_scale((255,), self._instance.rgb_color)
         return None
 
     @property
-    def effect(self):
-        if self._instance.color_mode == COLOR_MODE_WHITE:
+    def effect(self) -> str | None:
+        """Return the current effect."""
+        if self._instance.color_mode == ColorMode.WHITE:
             return "Off"
-        else:
-            return self._instance.effect
+        return self._instance.effect
 
     @property
-    def effect_list(self):
+    def effect_list(self) -> list[str]:
+        """Return the list of supported effects."""
         return self._instance.supported_effects
 
     @property
-    def supported_features(self):
-        return LightEntityFeature.EFFECT
-
-    @property
-    def color_mode(self):
+    def color_mode(self) -> ColorMode:
+        """Return the current color mode."""
         return self._instance.color_mode
 
-    @property
-    def device_info(self):
-        return {
-            "identifiers": {
-                (DOMAIN, self._instance.mac)
-            },
-            "name": self.name,
-            "connections": {(device_registry.CONNECTION_NETWORK_MAC, self._instance.mac)}
-        }
-
-    def _transform_color_brightness(self, color: Tuple[int, int, int], set_brightness: int):
-        rgb = match_max_scale((255,), color)
-        res = tuple(color * set_brightness // 255 for color in rgb)
-        return res
-
     async def async_turn_on(self, **kwargs: Any) -> None:
-        LOGGER.debug(f"Turning light on with args: {kwargs}")
-        #if not self.is_on:
-        #    await self._instance.turn_on()
-        if len(kwargs) == 0:
-            await self._instance.turn_on()
+        """Turn on the light."""
+        LOGGER.debug("Turn on with args: %s", kwargs)
 
-        if ATTR_BRIGHTNESS in kwargs and kwargs[ATTR_BRIGHTNESS]:
+        if not kwargs:
+            await self._instance.turn_on()
+            return
+
+        if ATTR_BRIGHTNESS in kwargs:
             await self._instance.set_white(kwargs[ATTR_BRIGHTNESS])
 
-        if ATTR_RGB_COLOR in kwargs and kwargs[ATTR_RGB_COLOR]:
-            color = kwargs[ATTR_RGB_COLOR]
-            await self._instance.set_color(color)
+        if ATTR_RGB_COLOR in kwargs:
+            await self._instance.set_color(kwargs[ATTR_RGB_COLOR])
 
-        if ATTR_EFFECT in kwargs and kwargs[ATTR_EFFECT]:
+        if ATTR_EFFECT in kwargs:
             await self._instance.set_effect(kwargs[ATTR_EFFECT])
 
-
     async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off the light."""
         await self._instance.turn_off()
 
     async def async_update(self) -> None:
+        """Update the light state."""
         await self._instance.update()

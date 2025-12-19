@@ -1,12 +1,17 @@
 {
     "domain": "beurer",
-    "name": "Beurer",
+    "name": "Beurer TL100",
     "codeowners": [],
     "config_flow": true,
-    "dependencies": [],
+    "dependencies": ["bluetooth"],
     "documentation": "https://github.com/deadolus/ha-beurer",
     "iot_class": "local_polling",
     "issue_tracker": "https://github.com/deadolus/ha-beurer/issues",
-    "requirements": [],
-    "version": "0.0.1"
+    "requirements": ["bleak-retry-connector>=3.0.0"],
+    "bluetooth": [
+        {
+            "local_name": "TL100*"
+        }
+    ],
+    "version": "0.1.0"
 }
