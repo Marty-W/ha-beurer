@@ -53,17 +53,20 @@ class BeurerInstance:
 
     def _disconnected_callback(self, client: BleakClient) -> None:
         """Handle disconnection."""
-        LOGGER.debug("Disconnected from %s", self._address)
-        self._client = None
-        self._write_uuid = None
-        self._read_uuid = None
+        # Only log and act if we had an actual connection
+        if self._write_uuid is not None:
+            LOGGER.debug("Disconnected from %s", self._address)
+            self._write_uuid = None
+            self._read_uuid = None
+            
+            if not self._expected_disconnect:
+                self._is_on = False
+                self._light_on = False
+                self._color_on = False
+                if self._trigger_update:
+                    self._hass.loop.call_soon_threadsafe(self._trigger_update)
         
-        if not self._expected_disconnect:
-            self._is_on = False
-            self._light_on = False
-            self._color_on = False
-            if self._trigger_update:
-                self._hass.loop.call_soon_threadsafe(self._trigger_update)
+        self._client = None
 
     def set_update_callback(self, trigger_update: Callable) -> None:
         """Set the callback for state updates."""
@@ -171,7 +174,8 @@ class BeurerInstance:
                     self._device,
                     self._name,
                     self._disconnected_callback,
-                    max_attempts=3,
+                    max_attempts=2,
+                    use_services_cache=True,
                 )
 
                 # Find characteristics

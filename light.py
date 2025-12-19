@@ -56,8 +56,15 @@ class BeurerLight(LightEntity):
     async def async_added_to_hass(self) -> None:
         """Handle being added to hass."""
         self._instance.set_update_callback(self._handle_update)
-        # Request initial state
-        await self._instance.update()
+        # Schedule initial state update - don't block startup
+        self.hass.async_create_task(self._async_initial_update())
+
+    async def _async_initial_update(self) -> None:
+        """Perform initial update in background."""
+        try:
+            await self._instance.update()
+        except Exception as err:
+            LOGGER.warning("Initial update failed, will retry on next interaction: %s", err)
 
     def _handle_update(self) -> None:
         """Handle state updates from the device."""
